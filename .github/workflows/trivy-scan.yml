@@ -1,0 +1,124 @@
+# This GitHub Actions workflow performs a security scan on a Docker image using Trivy.
+#All secrets are stored at organizational level. Use unherit secrets attribute when calling this workflow
+name: Trivy Security Scan
+
+on:
+
+  workflow_call:
+    inputs:
+      image-name:
+        description: 'Docker image name to scan'
+        required: false
+        type: string
+      image-tag:
+        description: 'Docker image tag to scan'
+        required: false
+        type: string
+        default: 'latest'
+      severity:
+        description: 'Severity levels to scan for'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+      dockerfile-path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: '.'
+      fail-on-vulnerabilities:
+        description: 'Fail workflow if vulnerabilities found'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      scan-status:
+        description: 'Scan completion status'
+        value: ${{ jobs.trivy-scan.outputs.status }}
+  workflow_dispatch:
+    inputs:
+      image-name:
+        description: 'Docker image name to scan (optional)'
+        required: false
+        type: string
+      severity:
+        description: 'Severity levels'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+
+env:
+  DOCKER_IMAGE: ${{ inputs.image-name || github.repository }}
+  IMAGE_TAG: ${{ inputs.image-tag || github.sha }}
+  SEVERITY_THRESHOLD: ${{ inputs.severity || 'CRITICAL,HIGH' }}
+
+jobs:
+  trivy-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.scan-result.outputs.status }}
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+      - name: Run Trivy filesystem scan
+        run: |
+          trivy fs --severity HIGH,CRITICAL --format table .
+    
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+
+      # - name: Set up Docker Buildx
+      #   uses: docker/setup-buildx-action@v3
+
+      # - name: Build Docker image
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: ${{ inputs.dockerfile-path || '.' }}
+      #     push: false
+      #     load: true
+      #     tags: ${{ env.DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: '${{ env.DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: ${{ env.SEVERITY_THRESHOLD }}
+
+      - name: Run Trivy for detailed output
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: '${{ env.DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}'
+          format: 'table'
+          severity: ${{ env.SEVERITY_THRESHOLD }}
+          exit-code: ${{ inputs.fail-on-vulnerabilities == false && '0' || '1' }}
+      - name: Generate Trivy report
+        if: always()
+        run: |
+          trivy fs --severity HIGH,CRITICAL --format json --output trivy-results.json .
+      
+      - name: Set scan result
+        id: scan-result
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi

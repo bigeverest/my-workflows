@@ -1,0 +1,104 @@
+# This action would be used in merged PR requests to update image tags
+# All secrets are stored at organizational level. Use unherit secrets attribute when calling this workflow
+
+name: Update Cron Image Tag
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Environment in Github configuration (sbx, uat, prod)'
+        required: true
+        type: string
+      values_file_path:
+        description: 'Full path to values file to be edited. Multipath supported'
+        required: true
+        type: string
+      gitops_repo:
+        description: 'GitOps repo to update'
+        required: true
+        type: string
+      image_tag:
+        description: 'Image tag output from build workflow'
+        required: true
+        type: string
+
+
+jobs:
+  UPDATE-CRON-IMAGE-TAG:
+    runs-on: ubuntu-latest
+    # environment:  # GitHub Environment for tracking and approval gate
+    steps:
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.gitops_repo}}
+          token: ${{ secrets.GH_TOKEN }}
+          ref: main
+
+      - name: Update Cron Image Tag in Manifest
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }} 
+          ENVIRONMENT: ${{ inputs.environment }}
+          FILE_PATHS: ${{ inputs.values_file_path }}
+        run: |
+          echo "🔍 Searching for directories with apps.yaml and values.yaml..."
+          # Navigate to base directory
+          if [ ! -d "$FILE_PATHS" ]; then
+            echo "Error: Directory '$FILE_PATHS' not found"
+            exit 1
+          fi
+
+          cd "$FILE_PATHS" || exit 1
+
+          # Find all directories containing BOTH apps.yaml and values.yaml
+          VALUES_FILES=""
+
+          while IFS= read -r dir; do
+            # Check if this directory has BOTH files
+            if [ -f "$dir/apps.yaml" ] && [ -f "$dir/values.yaml" ]; then
+              values_file="$dir/values.yaml"
+    
+              if [ -z "$VALUES_FILES" ]; then
+                VALUES_FILES="$values_file"
+              else
+                VALUES_FILES="$VALUES_FILES,$values_file"
+              fi
+            fi
+          done < <(find . -type d)
+
+          if [ -z "$VALUES_FILES" ]; then
+            echo "No directories found with both apps.yaml and values.yaml"
+            exit 1
+          fi
+
+          echo "Found values.yaml files: $VALUES_FILES"
+          echo ""
+          # Split the comma-separated paths and update each file
+          IFS=',' read -ra PATHS <<< "$VALUES_FILES"
+
+          for path in "${PATHS[@]}"; do
+            # Trim whitespace
+            path=$(echo "$path" | xargs)
+  
+            echo "Updating image tag in: $path"
+  
+            # Check if file exists
+            if [ -f "$path" ]; then
+              sed -i "s/tag: .*/tag: \"${IMAGE_TAG}\"/" "$path"
+              echo "✓ Successfully updated $path"
+            else
+              echo "⚠ Warning: File not found - $path"
+            fi
+           done
+
+      - name: Commit and Push Changes
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Deploy to ${ENVIRONMENT}: Update cron image tag to ${IMAGE_TAG}"
+          git push

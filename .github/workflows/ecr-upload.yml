@@ -1,0 +1,58 @@
+# This action would be used in merged PR requests to build and push docker images to ECR
+# All secrets are stored at organizational level. Use unherit secrets attribute when calling this workflow
+
+name: Build and Push Image to ECR
+
+on:
+  workflow_call:
+    inputs:
+      repository_name:
+        description: 'Name for the ECR repository where image will be stored'
+        required: true
+        type: string
+      target_name:
+        description: 'Input target name for multi-stage build' # Used for mono-repo
+        required: false
+        type: string
+    outputs:
+      image_tag:
+        description: 'The image tag that was built and pushed'
+        value: ${{ jobs.BUILD-AND-PUSH-IMAGE.outputs.image_tag }}
+
+
+jobs:
+  BUILD-AND-PUSH-IMAGE:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.IMAGE_TAG.outputs.PACKAGE_VERSION }}
+    steps:
+      - name: Checkout Repositiory
+        uses: actions/checkout@v4
+      
+      - name: Set Package Version
+        id: IMAGE_TAG
+        run: echo "PACKAGE_VERSION=$(date +'%Y.%m.%d').$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ECR_ROLE_TO_ASSUME }}
+          role-skip-session-tagging: true
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push docker image to Amazon ECR
+        id: build-image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ inputs.repository_name }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:${{ steps.IMAGE_TAG.outputs.PACKAGE_VERSION }} -t $REGISTRY/$REPOSITORY:latest ${{ inputs.target_name }} .
+          docker push $REGISTRY/$REPOSITORY:${{ steps.IMAGE_TAG.outputs.PACKAGE_VERSION }}
+          docker push $REGISTRY/$REPOSITORY:latest

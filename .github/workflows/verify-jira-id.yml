@@ -1,0 +1,37 @@
+# This action would be used in PR requests to check developer is following branch commit standard, if not PR will fail. 
+
+name: Validate Branch and Commits
+
+on:
+  workflow_call:
+
+jobs:
+  VERIFY-ID:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required to inspect all commits
+
+      - name: Validate branch name
+        run: |
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          # Check if branch matches "feat/..." or "bug/..." or "chore/..." (lowercase, hyphens allowed)
+          if [[ ! "$BRANCH_NAME" =~ ^(feat|bug|chore)\/[a-z0-9-]+$ ]]; then
+            echo "::error::Branch '$BRANCH_NAME' must follow 'feat/feature-name' or 'bug/bug-name' or 'chore/chore-name' format."
+            exit 1
+          fi
+
+      - name: Validate Jira ID in commits
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          # Check for Jira ID (e.g., SIDT-123) in commit messages
+          for commit in $(git rev-list --no-merges "$BASE_SHA".."$HEAD_SHA"); do
+            COMMIT_MSG=$(git show --quiet --format=%B "$commit")
+            if ! echo "$COMMIT_MSG" | grep -qE '[A-Z]+-[0-9]+'; then
+              echo "::error::Commit $commit is missing a Jira ticket ID (e.g., SIDT-123)."
+              exit 1
+            fi
+          done

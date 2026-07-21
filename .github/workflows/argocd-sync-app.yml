@@ -1,0 +1,82 @@
+# This action would be used in merged PR requests to sync specific images
+# All secrets are stored at organizational level. Use unherit secrets attribute when calling this workflow
+
+name: ArgoCD Sync Image
+
+on:
+  workflow_call:
+    inputs:
+      argocd_app_name:
+        description: 'Name of the ArgoCD App to be Synced'
+        required: true
+        type: string
+      environment:
+        description: 'Environment (rd, sbx, uat, prod)'
+        required: true
+        type: string
+
+jobs:
+  SYNC-IMAGE:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/argocd
+
+      - name: Set Environment Variables
+        id: env-vars
+        run: |
+          case "${{ inputs.environment }}" in
+            rd)
+              echo "ARGOCD_SERVER=${{ vars.ARGOCD_RD_SERVER }}" >> $GITHUB_ENV
+              echo "ARGOCD_USERNAME=${{ secrets.ARGOCD_RD_USERNAME }}" >> $GITHUB_ENV
+              echo "ARGOCD_PASSWORD=${{ secrets.ARGOCD_RD_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            sbx)
+              echo "ARGOCD_SERVER=${{ vars.ARGOCD_RD_SERVER }}" >> $GITHUB_ENV
+              echo "ARGOCD_USERNAME=${{ secrets.ARGOCD_RD_USERNAME }}" >> $GITHUB_ENV
+              echo "ARGOCD_PASSWORD=${{ secrets.ARGOCD_RD_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            uat)
+              echo "ARGOCD_SERVER=${{ vars.ARGOCD_PROD_SERVER }}" >> $GITHUB_ENV
+              echo "ARGOCD_USERNAME=${{ secrets.ARGOCD_PROD_USERNAME }}" >> $GITHUB_ENV
+              echo "ARGOCD_PASSWORD=${{ secrets.ARGOCD_PROD_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            prod)
+              echo "ARGOCD_SERVER=${{ vars.ARGOCD_PROD_SERVER }}" >> $GITHUB_ENV
+              echo "ARGOCD_USERNAME=${{ secrets.ARGOCD_PROD_USERNAME }}" >> $GITHUB_ENV
+              echo "ARGOCD_PASSWORD=${{ secrets.ARGOCD_PROD_PASSWORD }}" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "Invalid environment: ${{ inputs.environment }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Verify Credentials
+        run: |
+          echo "Verifying environment variables are set..."
+          if [ -z "$ARGOCD_SERVER" ] || [ -z "$ARGOCD_USERNAME" ] || [ -z "$ARGOCD_PASSWORD" ]; then
+            echo "Error: ARGOCD credentials not set"
+            exit 1
+          fi
+          echo "Server: $ARGOCD_SERVER"
+          echo "Username: $ARGOCD_USERNAME"
+
+      - name: Login to ArgoCD
+        run: |
+          echo "Logging in to ArgoCD"
+          argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --grpc-web
+
+      - name: Sync Application
+        run: |
+          IFS=',' read -ra APPS <<< "${{ inputs.argocd_app_name }}"
+          for APP in "${APPS[@]}"; do
+            APP=$(echo "$APP" | xargs)  # Trim whitespace
+            echo "Syncing application: $APP in ${{ inputs.environment }} environment"
+            argocd app get $APP --refresh
+            argocd app sync $APP --prune --force
+            echo "✅ $APP synced successfully"
+          done
